@@ -11,7 +11,10 @@ use rust_music_theory::{
     scale::{Direction, Scale, ScaleType},
 };
 
-static CSS: Asset = asset!("/assets/main.css");
+static CSS: Asset = asset!(
+    "/assets/main.css",
+    CssAssetOptions::new().with_preload(true)
+);
 
 const ALL_CHORD_QUALITIES: [chord::Quality; 8] = [
     Major,

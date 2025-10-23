@@ -1,6 +1,7 @@
 [application]
 
 [web.app]
+base_path = "chords"
 
 # HTML title tag content
 title = "chords"
