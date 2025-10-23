@@ -29,7 +29,7 @@ const ALL_CHORD_QUALITIES: [chord::Quality; 8] = [
 
 const ALL_NUMBERS: [chord::Number; 6] = [Triad, Seventh, MajorSeventh, Ninth, Eleventh, Thirteenth];
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ChordWrapper(pub Chord);
 
 impl Deref for ChordWrapper {
@@ -81,7 +81,7 @@ impl Display for ChordWrapper {
         if let Some(bass) = slash {
             write!(f, "{root}{quality_str}{number_str}/{bass}")
         } else {
-            write!(f, "{root}")
+            write!(f, "{root}{quality_str}{number_str}")
         }
     }
 }
@@ -128,7 +128,7 @@ fn generate_next_chord(
         } else {
             0
         };
-        let inversion_number = rand::random_range(0..inversion_range);
+        let inversion_number = rand::random_range(0..=inversion_range);
         let chord = Chord::with_inversion(root, quality, *number, inversion_number);
 
         if chord.notes().len() == 3 && chord.number != Triad {
@@ -155,8 +155,9 @@ static CHORD: GlobalSignal<ChordWrapper> = Signal::global(|| next_chord());
 
 #[component]
 fn CurrentChord() -> Element {
+    let debug_print = format!("{:?}", CHORD);
     rsx! {
-        div { id: "chord", "{CHORD}" }
+        div { id: "chord", "{CHORD}", " {debug_print}" }
     }
 }
 
