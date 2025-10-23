@@ -59,7 +59,8 @@ impl Display for ChordWrapper {
         };
 
         let quality_str = match quality {
-            Major => "",
+            Major if matches!(number, Triad | Seventh) => "",
+            Major => "Δ",
             Minor => "-",
             Diminished => "o",
             Augmented => "+",
@@ -155,9 +156,8 @@ static CHORD: GlobalSignal<ChordWrapper> = Signal::global(|| next_chord());
 
 #[component]
 fn CurrentChord() -> Element {
-    let debug_print = format!("{:?}", CHORD);
     rsx! {
-        div { id: "chord", "{CHORD}", " {debug_print}" }
+        div { id: "chord", "{CHORD}"}
     }
 }
 
