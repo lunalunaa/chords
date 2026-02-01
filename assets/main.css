@@ -67,19 +67,26 @@ body {
 
 /* Buttons Section */
 #buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
     padding: 20px;
     padding-bottom: max(20px, env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
 }
 
+.primary-btn {
+    grid-column: 1 / -1;
+}
+
 @media (min-width: 480px) {
     #buttons {
-        flex-direction: row;
-        justify-content: center;
-        gap: 16px;
+        grid-template-columns: 2fr 1fr 1fr;
+        gap: 12px;
+    }
+
+    .primary-btn {
+        grid-column: auto;
     }
 }
 
@@ -89,6 +96,7 @@ button {
     border: none;
     transition: opacity 0.15s;
     -webkit-appearance: none;
+    appearance: none;
 }
 
 button:hover {
@@ -102,11 +110,27 @@ button:active {
 .primary-btn {
     background: var(--accent);
     color: white;
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 500;
-    padding: 14px 28px;
+    padding: 12px 24px;
     border-radius: 4px;
-    min-height: 52px;
+    min-height: 48px;
+}
+
+.play-btn {
+    background: transparent;
+    color: var(--accent);
+    font-size: 1rem;
+    font-weight: 400;
+    padding: 12px 24px;
+    border-radius: 4px;
+    border: 1px solid var(--accent);
+    min-height: 48px;
+}
+
+.play-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
 }
 
 .settings-btn {

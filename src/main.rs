@@ -12,6 +12,7 @@ use rust_music_theory::{
     scale::{Direction, Scale, ScaleType},
 };
 use strum::{EnumIter, IntoEnumIterator};
+use wasm_bindgen::prelude::*;
 
 static CSS: Asset = asset!("assets/main.css");
 
@@ -248,6 +249,83 @@ fn generate_chord() {
     *CHORD.write() = Some(next_chord_with_settings(&settings));
 }
 
+#[wasm_bindgen(inline_js = r#"
+export function playChord(frequencies, duration) {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioContext.currentTime;
+
+    frequencies.forEach(freq => {
+        // Create a more piano-like sound with multiple harmonics
+        const fundamental = audioContext.createOscillator();
+        const second = audioContext.createOscillator();
+        const third = audioContext.createOscillator();
+
+        const fundamentalGain = audioContext.createGain();
+        const secondGain = audioContext.createGain();
+        const thirdGain = audioContext.createGain();
+        const masterGain = audioContext.createGain();
+
+        // Connect oscillators to their gain nodes
+        fundamental.connect(fundamentalGain);
+        second.connect(secondGain);
+        third.connect(thirdGain);
+
+        fundamentalGain.connect(masterGain);
+        secondGain.connect(masterGain);
+        thirdGain.connect(masterGain);
+        masterGain.connect(audioContext.destination);
+
+        // Set frequencies for harmonics
+        fundamental.frequency.value = freq;
+        second.frequency.value = freq * 2;
+        third.frequency.value = freq * 3;
+
+        // Use triangle wave for warmer tone
+        fundamental.type = 'triangle';
+        second.type = 'triangle';
+        third.type = 'sine';
+
+        // Balance the harmonics
+        fundamentalGain.gain.value = 1.0;
+        secondGain.gain.value = 0.3;
+        thirdGain.gain.value = 0.15;
+
+        // Piano-like envelope: fast attack, exponential decay
+        masterGain.gain.setValueAtTime(0, now);
+        masterGain.gain.linearRampToValueAtTime(0.15, now + 0.005); // Very fast attack
+        masterGain.gain.exponentialRampToValueAtTime(0.08, now + 0.2); // Quick decay
+        masterGain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+
+        fundamental.start(now);
+        second.start(now);
+        third.start(now);
+
+        fundamental.stop(now + duration);
+        second.stop(now + duration);
+        third.stop(now + duration);
+    });
+}
+"#)]
+extern "C" {
+    fn playChord(frequencies: Vec<f64>, duration: f64);
+}
+
+fn play_current_chord() {
+    if let Some(chord) = CHORD.read().as_ref() {
+        let frequencies: Vec<f64> = chord
+            .notes()
+            .iter()
+            .map(|note| {
+                // Convert MIDI note to frequency: f = 440 * 2^((n-69)/12)
+                let midi_note = note.pitch.into_u8() as f64 + (note.octave as f64 * 12.0);
+                440.0 * 2.0_f64.powf((midi_note - 69.0) / 12.0)
+            })
+            .collect();
+
+        playChord(frequencies, 2.0);
+    }
+}
+
 #[component]
 fn CurrentChord() -> Element {
     let chord = CHORD.read();
@@ -426,6 +504,12 @@ fn App() -> Element {
                     class: "primary-btn",
                     onclick: move |_| generate_chord(),
                     "Next Chord"
+                }
+                button {
+                    class: "play-btn",
+                    onclick: move |_| play_current_chord(),
+                    disabled: CHORD.read().is_none(),
+                    "▶ Play"
                 }
                 button {
                     class: "settings-btn",
