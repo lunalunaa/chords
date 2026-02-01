@@ -59,18 +59,23 @@ impl ChordQuality {
 enum ChordNumber {
     Triad,
     Seventh,
-    MajorSeventh,
     Ninth,
     Eleventh,
     Thirteenth,
 }
 
 impl ChordNumber {
-    fn to_library_number(self) -> chord::Number {
+    fn to_library_number(self, quality: chord::Quality) -> chord::Number {
         match self {
             ChordNumber::Triad => chord::Number::Triad,
-            ChordNumber::Seventh => chord::Number::Seventh,
-            ChordNumber::MajorSeventh => chord::Number::MajorSeventh,
+            ChordNumber::Seventh => {
+                // Major quality + 7th = Major Seventh
+                if quality == chord::Quality::Major {
+                    chord::Number::MajorSeventh
+                } else {
+                    chord::Number::Seventh
+                }
+            }
             ChordNumber::Ninth => chord::Number::Ninth,
             ChordNumber::Eleventh => chord::Number::Eleventh,
             ChordNumber::Thirteenth => chord::Number::Thirteenth,
@@ -81,7 +86,6 @@ impl ChordNumber {
         match self {
             ChordNumber::Triad => "Triad",
             ChordNumber::Seventh => "7th",
-            ChordNumber::MajorSeventh => "Maj7",
             ChordNumber::Ninth => "9th",
             ChordNumber::Eleventh => "11th",
             ChordNumber::Thirteenth => "13th",
@@ -150,12 +154,11 @@ impl Display for ChordWrapper {
 fn generate_next_chord(
     s: &Scale,
     qualities: &[chord::Quality],
-    numbers: &[chord::Number],
+    numbers: &[ChordNumber],
     inversion: bool,
 ) -> Result<ChordWrapper> {
     let mut rng = rand::rng();
-    let default_numbers: Vec<chord::Number> =
-        ChordNumber::iter().map(|n| n.to_library_number()).collect();
+    let default_numbers: Vec<ChordNumber> = ChordNumber::iter().collect();
     let default_qualities: Vec<chord::Quality> = ChordQuality::iter()
         .map(|q| q.to_library_quality())
         .collect();
@@ -175,8 +178,9 @@ fn generate_next_chord(
         let root = s.notes().choose(&mut rng).context("Empty Scale!")?.pitch;
         let quality = *(qualities.choose(&mut rng).context("Empty Chord Quality!"))?;
         let number = numbers.choose(&mut rng).context("Empty Chord Number!")?;
+        let library_number = number.to_library_number(quality);
         let inversion_range: u8 = if inversion {
-            match number {
+            match library_number {
                 chord::Number::Triad => 2,
                 chord::Number::Seventh => 3,
                 chord::Number::MajorSeventh => 4,
@@ -188,7 +192,7 @@ fn generate_next_chord(
             0
         };
         let inversion_number = rand::random_range(0..=inversion_range);
-        let chord = Chord::with_inversion(root, quality, *number, inversion_number);
+        let chord = Chord::with_inversion(root, quality, library_number, inversion_number);
 
         if chord.notes().len() == 3 && chord.number != Triad {
             continue; // if it's an impossible chord then generate again
@@ -230,11 +234,7 @@ fn next_chord_with_settings(settings: &ChordSettings) -> ChordWrapper {
         .iter()
         .map(|q| q.to_library_quality())
         .collect();
-    let numbers: Vec<chord::Number> = settings
-        .numbers
-        .iter()
-        .map(|n| n.to_library_number())
-        .collect();
+    let numbers: Vec<ChordNumber> = settings.numbers.iter().copied().collect();
 
     generate_next_chord(&scale, &qualities, &numbers, settings.inversions).unwrap()
 }
