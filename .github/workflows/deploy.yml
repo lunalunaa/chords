@@ -1,0 +1,51 @@
+name: Build and Deploy
+
+on:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    build-and-deploy:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-action@stable
+              with:
+                  targets: wasm32-unknown-unknown
+
+            - name: Cache Cargo dependencies
+              uses: Swatinem/rust-cache@v2
+
+            - name: Install Dioxus CLI
+              run: cargo install dioxus-cli --locked
+
+            - name: Build for web (release)
+              run: dx build --release --platform web
+
+            - name: Clear deploy directory
+              uses: appleboy/ssh-action@v1.0.3
+              with:
+                  host: ${{ secrets.SERVER_HOST }}
+                  username: ${{ secrets.SERVER_USERNAME }}
+                  key: ${{ secrets.SSH_PRIVATE_KEY }}
+                  port: ${{ secrets.SERVER_PORT || 22 }}
+                  script: rm -rf ${{ secrets.DEPLOY_PATH }}/*
+
+            - name: Deploy to server via SCP
+              uses: appleboy/scp-action@v0.1.7
+              with:
+                  host: ${{ secrets.SERVER_HOST }}
+                  username: ${{ secrets.SERVER_USERNAME }}
+                  key: ${{ secrets.SSH_PRIVATE_KEY }}
+                  port: ${{ secrets.SERVER_PORT || 22 }}
+                  source: "target/dx/chords/release/web/public/*"
+                  target: ${{ secrets.DEPLOY_PATH }}
+                  strip_components: 5
