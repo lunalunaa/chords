@@ -397,7 +397,8 @@ fn SettingsPanel() -> Element {
                             label: if settings.inversions { "Enabled".to_string() } else { "Disabled".to_string() },
                             active: settings.inversions,
                             on_toggle: move |_| {
-                                SETTINGS.write().inversions = !SETTINGS.read().inversions;
+                                let mut settings = SETTINGS.write();
+                                settings.inversions = !settings.inversions;
                             },
                         }
                     }
