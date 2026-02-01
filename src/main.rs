@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
 
-use anyhow::anyhow;
+use anyhow::Context;
 use anyhow::{Ok, Result};
 use dioxus::prelude::*;
 use rand::prelude::*;
@@ -10,13 +11,12 @@ use rust_music_theory::{
     note::{Notes, Pitch},
     scale::{Direction, Scale, ScaleType},
 };
+use strum::{EnumIter, IntoEnumIterator};
 
-static CSS: Asset = asset!(
-    "/assets/main.css",
-    CssAssetOptions::new().with_preload(true)
-);
+static CSS: Asset = asset!("assets/main.css");
 
-const ALL_CHORD_QUALITIES: [chord::Quality; 8] = [
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter)]
+enum ChordQuality {
     Major,
     Minor,
     Diminished,
@@ -25,9 +25,69 @@ const ALL_CHORD_QUALITIES: [chord::Quality; 8] = [
     Dominant,
     Suspended2,
     Suspended4,
-];
+}
 
-const ALL_NUMBERS: [chord::Number; 6] = [Triad, Seventh, MajorSeventh, Ninth, Eleventh, Thirteenth];
+impl ChordQuality {
+    fn to_library_quality(self) -> chord::Quality {
+        match self {
+            ChordQuality::Major => chord::Quality::Major,
+            ChordQuality::Minor => chord::Quality::Minor,
+            ChordQuality::Diminished => chord::Quality::Diminished,
+            ChordQuality::Augmented => chord::Quality::Augmented,
+            ChordQuality::HalfDiminished => chord::Quality::HalfDiminished,
+            ChordQuality::Dominant => chord::Quality::Dominant,
+            ChordQuality::Suspended2 => chord::Quality::Suspended2,
+            ChordQuality::Suspended4 => chord::Quality::Suspended4,
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            ChordQuality::Major => "Major",
+            ChordQuality::Minor => "Minor",
+            ChordQuality::Diminished => "Dim",
+            ChordQuality::Augmented => "Aug",
+            ChordQuality::HalfDiminished => "Half-Dim",
+            ChordQuality::Dominant => "Dom",
+            ChordQuality::Suspended2 => "Sus2",
+            ChordQuality::Suspended4 => "Sus4",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumIter)]
+enum ChordNumber {
+    Triad,
+    Seventh,
+    MajorSeventh,
+    Ninth,
+    Eleventh,
+    Thirteenth,
+}
+
+impl ChordNumber {
+    fn to_library_number(self) -> chord::Number {
+        match self {
+            ChordNumber::Triad => chord::Number::Triad,
+            ChordNumber::Seventh => chord::Number::Seventh,
+            ChordNumber::MajorSeventh => chord::Number::MajorSeventh,
+            ChordNumber::Ninth => chord::Number::Ninth,
+            ChordNumber::Eleventh => chord::Number::Eleventh,
+            ChordNumber::Thirteenth => chord::Number::Thirteenth,
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            ChordNumber::Triad => "Triad",
+            ChordNumber::Seventh => "7th",
+            ChordNumber::MajorSeventh => "Maj7",
+            ChordNumber::Ninth => "9th",
+            ChordNumber::Eleventh => "11th",
+            ChordNumber::Thirteenth => "13th",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct ChordWrapper(pub Chord);
@@ -59,7 +119,7 @@ impl Display for ChordWrapper {
         };
 
         let quality_str = match quality {
-            Major if matches!(number, Triad | Seventh) => "",
+            Major if matches!(number, Triad | Seventh | MajorSeventh) => "",
             Major => "Δ",
             Minor => "-",
             Diminished => "o",
@@ -94,29 +154,27 @@ fn generate_next_chord(
     inversion: bool,
 ) -> Result<ChordWrapper> {
     let mut rng = rand::rng();
+    let default_numbers: Vec<chord::Number> =
+        ChordNumber::iter().map(|n| n.to_library_number()).collect();
+    let default_qualities: Vec<chord::Quality> = ChordQuality::iter()
+        .map(|q| q.to_library_quality())
+        .collect();
+
     let numbers = if numbers.is_empty() {
-        &ALL_NUMBERS
+        &default_numbers
     } else {
         numbers
     };
     let qualities = if qualities.is_empty() {
-        &ALL_CHORD_QUALITIES
+        &default_qualities
     } else {
         qualities
     };
 
     loop {
-        let root = s
-            .notes()
-            .choose(&mut rng)
-            .ok_or(anyhow!("Empty Scale!"))?
-            .pitch;
-        let quality = *(qualities
-            .choose(&mut rng)
-            .ok_or(anyhow!("Empty Chord Quality!"))?);
-        let number = numbers
-            .choose(&mut rng)
-            .ok_or(anyhow!("Empty Chord Number!"))?;
+        let root = s.notes().choose(&mut rng).context("Empty Scale!")?.pitch;
+        let quality = *(qualities.choose(&mut rng).context("Empty Chord Quality!"))?;
+        let number = numbers.choose(&mut rng).context("Empty Chord Number!")?;
         let inversion_range: u8 = if inversion {
             match number {
                 chord::Number::Triad => 2,
@@ -140,7 +198,24 @@ fn generate_next_chord(
     }
 }
 
-fn next_chord() -> ChordWrapper {
+#[derive(Clone, Debug)]
+struct ChordSettings {
+    qualities: HashSet<ChordQuality>,
+    numbers: HashSet<ChordNumber>,
+    inversions: bool,
+}
+
+impl Default for ChordSettings {
+    fn default() -> Self {
+        Self {
+            qualities: ChordQuality::iter().collect(),
+            numbers: ChordNumber::iter().collect(),
+            inversions: true,
+        }
+    }
+}
+
+fn next_chord_with_settings(settings: &ChordSettings) -> ChordWrapper {
     let scale = Scale::new(
         ScaleType::Chromatic,
         Pitch::from_u8(0),
@@ -149,15 +224,186 @@ fn next_chord() -> ChordWrapper {
         Direction::Ascending,
     )
     .unwrap();
-    generate_next_chord(&scale, &[], &[], true).unwrap()
+
+    let qualities: Vec<chord::Quality> = settings
+        .qualities
+        .iter()
+        .map(|q| q.to_library_quality())
+        .collect();
+    let numbers: Vec<chord::Number> = settings
+        .numbers
+        .iter()
+        .map(|n| n.to_library_number())
+        .collect();
+
+    generate_next_chord(&scale, &qualities, &numbers, settings.inversions).unwrap()
 }
 
-static CHORD: GlobalSignal<ChordWrapper> = Signal::global(|| next_chord());
+static SETTINGS: GlobalSignal<ChordSettings> = Signal::global(ChordSettings::default);
+static CHORD: GlobalSignal<Option<ChordWrapper>> = Signal::global(|| None);
+static SETTINGS_OPEN: GlobalSignal<bool> = Signal::global(|| false);
+
+fn generate_chord() {
+    let settings = SETTINGS.read();
+    *CHORD.write() = Some(next_chord_with_settings(&settings));
+}
 
 #[component]
 fn CurrentChord() -> Element {
+    let chord = CHORD.read();
     rsx! {
-        div { id: "chord", "{CHORD}"}
+        div { id: "chord",
+            match chord.as_ref() {
+                Some(c) => rsx! { "{c}" },
+                None => rsx! {
+                    span { class: "chord-placeholder", "Configure & Start" }
+                },
+            }
+        }
+    }
+}
+
+#[component]
+fn ToggleButton(label: String, active: bool, on_toggle: EventHandler<()>) -> Element {
+    let class = if active {
+        "toggle-btn active"
+    } else {
+        "toggle-btn"
+    };
+    rsx! {
+        button {
+            class: "{class}",
+            onclick: move |_| on_toggle.call(()),
+            "{label}"
+        }
+    }
+}
+
+#[component]
+fn SettingsPanel() -> Element {
+    let settings_open = SETTINGS_OPEN.read();
+
+    if !*settings_open {
+        return rsx! {};
+    }
+
+    let settings = SETTINGS.read();
+
+    rsx! {
+        div { class: "settings-overlay",
+            onclick: move |_| *SETTINGS_OPEN.write() = false,
+        }
+        div { class: "settings-panel",
+            div { class: "settings-header",
+                h2 { "Chord Options" }
+                button {
+                    class: "close-btn",
+                    onclick: move |_| *SETTINGS_OPEN.write() = false,
+                    "✕"
+                }
+            }
+
+            div { class: "settings-content",
+                // Chord Qualities Section
+                div { class: "settings-section",
+                    h3 { "Chord Qualities" }
+                    div { class: "toggle-grid",
+                        for quality in ChordQuality::iter() {
+                            ToggleButton {
+                                key: "{quality:?}",
+                                label: quality.display_name().to_string(),
+                                active: settings.qualities.contains(&quality),
+                                on_toggle: move |_| {
+                                    let mut settings = SETTINGS.write();
+                                    if settings.qualities.contains(&quality) {
+                                        if settings.qualities.len() > 1 {
+                                            settings.qualities.remove(&quality);
+                                        }
+                                    } else {
+                                        settings.qualities.insert(quality);
+                                    }
+                                },
+                            }
+                        }
+                    }
+                    div { class: "quick-actions",
+                        button {
+                            class: "quick-btn",
+                            onclick: move |_| {
+                                SETTINGS.write().qualities = ChordQuality::iter().collect();
+                            },
+                            "All"
+                        }
+                        button {
+                            class: "quick-btn",
+                            onclick: move |_| {
+                                let mut set = HashSet::new();
+                                set.insert(ChordQuality::Major);
+                                set.insert(ChordQuality::Minor);
+                                SETTINGS.write().qualities = set;
+                            },
+                            "Basic"
+                        }
+                    }
+                }
+
+                // Chord Numbers Section
+                div { class: "settings-section",
+                    h3 { "Extensions" }
+                    div { class: "toggle-grid",
+                        for number in ChordNumber::iter() {
+                            ToggleButton {
+                                key: "{number:?}",
+                                label: number.display_name().to_string(),
+                                active: settings.numbers.contains(&number),
+                                on_toggle: move |_| {
+                                    let mut settings = SETTINGS.write();
+                                    if settings.numbers.contains(&number) {
+                                        if settings.numbers.len() > 1 {
+                                            settings.numbers.remove(&number);
+                                        }
+                                    } else {
+                                        settings.numbers.insert(number);
+                                    }
+                                },
+                            }
+                        }
+                    }
+                    div { class: "quick-actions",
+                        button {
+                            class: "quick-btn",
+                            onclick: move |_| {
+                                SETTINGS.write().numbers = ChordNumber::iter().collect();
+                            },
+                            "All"
+                        }
+                        button {
+                            class: "quick-btn",
+                            onclick: move |_| {
+                                let mut set = HashSet::new();
+                                set.insert(ChordNumber::Triad);
+                                SETTINGS.write().numbers = set;
+                            },
+                            "Triads Only"
+                        }
+                    }
+                }
+
+                // Inversions Section
+                div { class: "settings-section",
+                    h3 { "Inversions" }
+                    div { class: "toggle-grid",
+                        ToggleButton {
+                            label: if settings.inversions { "Enabled".to_string() } else { "Disabled".to_string() },
+                            active: settings.inversions,
+                            on_toggle: move |_| {
+                                SETTINGS.write().inversions = !SETTINGS.read().inversions;
+                            },
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -166,9 +412,29 @@ fn App() -> Element {
     rsx! {
         document::Stylesheet { href: CSS }
         document::Title { "Chords Practice" }
-        div { id: "title", h1 { "Play this Chord!" } }
-        CurrentChord {  }
-        div {id: "buttons",  button { onclick: move |_| *CHORD.write() = next_chord(), "Next" } }
+
+        div { id: "main",
+            div { id: "title",
+                h1 { "🎹 Chord Practice" }
+            }
+
+            CurrentChord {}
+
+            div { id: "buttons",
+                button {
+                    class: "primary-btn",
+                    onclick: move |_| generate_chord(),
+                    "Next Chord"
+                }
+                button {
+                    class: "settings-btn",
+                    onclick: move |_| *SETTINGS_OPEN.write() = true,
+                    "⚙️ Options"
+                }
+            }
+
+            SettingsPanel {}
+        }
     }
 }
 

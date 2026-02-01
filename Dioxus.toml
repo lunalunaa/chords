@@ -1,22 +1,18 @@
 [application]
+name = "chords"
+asset_dir = "assets"
 
 [web.app]
 base_path = "chords"
-
-# HTML title tag content
 title = "chords"
 
-# include `assets` in web platform
 [web.resource]
-
-# Additional CSS style files
-style = []
-
-# Additional JavaScript files
+style = ["main.css"]
 script = []
 
 [web.resource.dev]
-
-# Javascript code file
-# serve: [dev-server] only
 script = []
+
+[web.watcher]
+watch_path = ["src", "assets"]
+reload_html = true
