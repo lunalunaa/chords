@@ -416,7 +416,7 @@ fn App() -> Element {
 
         div { id: "main",
             div { id: "title",
-                h1 { "🎹 Chord Practice" }
+                h1 { "Play This Chord!" }
             }
 
             CurrentChord {}
@@ -430,7 +430,7 @@ fn App() -> Element {
                 button {
                     class: "settings-btn",
                     onclick: move |_| *SETTINGS_OPEN.write() = true,
-                    "⚙️ Options"
+                    "Options"
                 }
             }
 
