@@ -323,8 +323,10 @@ struct RecognitionResult {
 }
 
 #[wasm_bindgen(inline_js = r#"
-    // Store the stop function globally
+    // Store the stop function and previous notes globally
     window.audioStopFunction = null;
+    window.previousNotes = [];
+    window.noiseFloor = 100;
 
     export function startListening(callback) {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -334,7 +336,7 @@ struct RecognitionResult {
 
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         let analyser = null;
-        let dataArray = null;
+        let timeDataArray = null;
         let animationId = null;
         let mediaStream = null;
 
@@ -343,68 +345,238 @@ struct RecognitionResult {
                 mediaStream = stream;
                 const source = audioContext.createMediaStreamSource(stream);
                 analyser = audioContext.createAnalyser();
-                analyser.fftSize = 4096;
-                analyser.smoothingTimeConstant = 0.8;
+                analyser.fftSize = 8192; // Higher resolution for better accuracy
+                analyser.smoothingTimeConstant = 0.85;
                 source.connect(analyser);
 
                 const bufferLength = analyser.frequencyBinCount;
-                dataArray = new Float32Array(bufferLength);
+                timeDataArray = new Float32Array(bufferLength);
+
+                // Adaptive noise floor calculation
+                function updateNoiseFloor(freqData) {
+                    const sum = freqData.reduce((acc, val) => acc + val, 0);
+                    const avg = sum / freqData.length;
+                    window.noiseFloor = window.noiseFloor * 0.95 + avg * 0.05;
+                }
+
+                // Autocorrelation for fundamental frequency detection
+                function autoCorrelate(buffer, sampleRate) {
+                    const minFreq = 50;
+                    const maxFreq = 2000;
+                    const minSamples = Math.floor(sampleRate / maxFreq);
+                    const maxSamples = Math.ceil(sampleRate / minFreq);
+
+                    let bestOffset = -1;
+                    let bestCorrelation = 0;
+                    let foundGoodCorrelation = false;
+
+                    // Calculate RMS to check if signal is strong enough
+                    let rms = 0;
+                    for (let i = 0; i < buffer.length; i++) {
+                        rms += buffer[i] * buffer[i];
+                    }
+                    rms = Math.sqrt(rms / buffer.length);
+
+                    if (rms < 0.01) return -1; // Signal too weak
+
+                    // Normalize buffer
+                    const normalized = new Float32Array(buffer.length);
+                    for (let i = 0; i < buffer.length; i++) {
+                        normalized[i] = buffer[i] / rms;
+                    }
+
+                    // Autocorrelation
+                    for (let offset = minSamples; offset < maxSamples && offset < buffer.length / 2; offset++) {
+                        let correlation = 0;
+                        for (let i = 0; i < buffer.length - offset; i++) {
+                            correlation += Math.abs(normalized[i] - normalized[i + offset]);
+                        }
+                        correlation = 1 - correlation / (buffer.length - offset);
+
+                        if (correlation > 0.9 && correlation > bestCorrelation) {
+                            bestCorrelation = correlation;
+                            bestOffset = offset;
+                            foundGoodCorrelation = true;
+                        }
+                    }
+
+                    if (foundGoodCorrelation && bestOffset > 0) {
+                        return sampleRate / bestOffset;
+                    }
+                    return -1;
+                }
+
+                // Harmonic Product Spectrum for better fundamental detection
+                function harmonicProductSpectrum(freqData, sampleRate, fftSize) {
+                    const hpsData = new Float32Array(freqData.length);
+                    const numHarmonics = 5;
+
+                    for (let i = 0; i < freqData.length; i++) {
+                        hpsData[i] = freqData[i];
+                    }
+
+                    // Multiply by downsampled versions (harmonics)
+                    for (let h = 2; h <= numHarmonics; h++) {
+                        for (let i = 0; i < Math.floor(freqData.length / h); i++) {
+                            hpsData[i] *= freqData[i * h];
+                        }
+                    }
+
+                    return hpsData;
+                }
+
+                // Check if freq2 is a harmonic of freq1
+                function isHarmonic(freq1, freq2, tolerance = 0.05) {
+                    if (freq2 <= freq1) return false;
+
+                    const ratio = freq2 / freq1;
+                    const nearestHarmonic = Math.round(ratio);
+
+                    // Check if close to integer harmonic (2x, 3x, 4x, etc.)
+                    if (nearestHarmonic >= 2 && nearestHarmonic <= 8) {
+                        const expectedFreq = freq1 * nearestHarmonic;
+                        const error = Math.abs(freq2 - expectedFreq) / expectedFreq;
+                        return error < tolerance;
+                    }
+                    return false;
+                }
+
+                // Filter out harmonics from peaks
+                function filterHarmonics(peaks) {
+                    if (peaks.length === 0) return [];
+
+                    // Sort by magnitude (strongest first)
+                    const sorted = [...peaks].sort((a, b) => b.magnitude - a.magnitude);
+                    const fundamentals = [];
+
+                    for (let i = 0; i < sorted.length; i++) {
+                        const current = sorted[i];
+                        let isHarmonicOfExisting = false;
+
+                        // Check if this peak is a harmonic of any already-accepted fundamental
+                        for (let j = 0; j < fundamentals.length; j++) {
+                            if (isHarmonic(fundamentals[j].freq, current.freq)) {
+                                isHarmonicOfExisting = true;
+                                break;
+                            }
+                        }
+
+                        if (!isHarmonicOfExisting) {
+                            fundamentals.push(current);
+                        }
+                    }
+
+                    return fundamentals;
+                }
 
                 function detectPitch() {
-                    analyser.getFloatTimeDomainData(dataArray);
-
-                    // Autocorrelation pitch detection
-                    const sampleRate = audioContext.sampleRate;
-                    const threshold = 0.2;
-                    const detected = [];
-
-                    // Simple peak detection for multiple pitches
+                    analyser.getFloatTimeDomainData(timeDataArray);
                     const freqData = new Uint8Array(analyser.frequencyBinCount);
                     analyser.getByteFrequencyData(freqData);
 
-                    const minFreq = 50; // ~G1
-                    const maxFreq = 2000; // ~B6
+                    const sampleRate = audioContext.sampleRate;
+
+                    // Update adaptive noise floor
+                    updateNoiseFloor(freqData);
+
+                    // Apply Harmonic Product Spectrum
+                    const hpsData = harmonicProductSpectrum(Array.from(freqData), sampleRate, analyser.fftSize);
+
+                    const minFreq = 50;
+                    const maxFreq = 2000;
                     const minBin = Math.floor(minFreq * analyser.fftSize / sampleRate);
                     const maxBin = Math.floor(maxFreq * analyser.fftSize / sampleRate);
 
-                    // Find peaks in frequency domain
+                    // Dynamic threshold based on noise floor
+                    const minPeakHeight = Math.max(window.noiseFloor * 2.5, 100);
+                    const minPeakDistance = 5;
+
+                    // Find peaks using both FFT and HPS
                     const peaks = [];
-                    const minPeakHeight = 120; // Threshold for peak detection
-                    const minPeakDistance = 3; // Minimum distance between peaks
 
                     for (let i = minBin; i < maxBin; i++) {
-                        if (freqData[i] > minPeakHeight) {
+                        const fftMag = freqData[i];
+                        const hpsMag = hpsData[i];
+
+                        // Combined score: FFT magnitude + HPS boost
+                        const score = fftMag + (hpsMag / 255) * 50;
+
+                        if (fftMag > minPeakHeight) {
                             let isPeak = true;
+
                             // Check if it's a local maximum
-                            for (let j = Math.max(minBin, i - minPeakDistance); j <= Math.min(maxBin - 1, i + minPeakDistance); j++) {
-                                if (j !== i && freqData[j] >= freqData[i]) {
+                            for (let j = Math.max(minBin, i - minPeakDistance);
+                                 j <= Math.min(maxBin - 1, i + minPeakDistance); j++) {
+                                if (j !== i && freqData[j] >= fftMag) {
                                     isPeak = false;
                                     break;
                                 }
                             }
+
                             if (isPeak) {
-                                const freq = i * sampleRate / analyser.fftSize;
-                                peaks.push({ freq, magnitude: freqData[i] });
+                                // Parabolic interpolation for sub-bin accuracy
+                                const y1 = i > 0 ? freqData[i - 1] : freqData[i];
+                                const y2 = freqData[i];
+                                const y3 = i < freqData.length - 1 ? freqData[i + 1] : freqData[i];
+
+                                const delta = 0.5 * (y3 - y1) / (2 * y2 - y1 - y3);
+                                const interpolatedBin = i + (isFinite(delta) ? delta : 0);
+
+                                const freq = interpolatedBin * sampleRate / analyser.fftSize;
+                                peaks.push({ freq, magnitude: fftMag, score });
                             }
                         }
                     }
 
-                    // Sort peaks by magnitude and take top ones
-                    peaks.sort((a, b) => b.magnitude - a.magnitude);
-                    const topPeaks = peaks.slice(0, 6); // Max 6 notes in a chord
+                    // Filter out harmonics
+                    const filteredPeaks = filterHarmonics(peaks);
+
+                    // Try autocorrelation for strongest fundamental
+                    const autoCorrelatedFreq = autoCorrelate(timeDataArray, sampleRate);
+                    if (autoCorrelatedFreq > 0) {
+                        // Check if autocorrelation found a note not in peaks
+                        const exists = filteredPeaks.some(p => Math.abs(p.freq - autoCorrelatedFreq) < 10);
+                        if (!exists) {
+                            filteredPeaks.unshift({
+                                freq: autoCorrelatedFreq,
+                                magnitude: 200,
+                                score: 250
+                            });
+                        }
+                    }
+
+                    // Sort by score and take top peaks
+                    filteredPeaks.sort((a, b) => b.score - a.score);
+                    const topPeaks = filteredPeaks.slice(0, 6);
 
                     // Convert frequencies to MIDI notes
-                    const notes = topPeaks.map(peak => {
-                        const midiNote = Math.round(12 * Math.log2(peak.freq / 440) + 69);
-                        return midiNote;
-                    }).filter(note => note >= 21 && note <= 108); // Valid piano range
+                    const detectedNotes = topPeaks
+                        .map(peak => {
+                            const midiNote = Math.round(12 * Math.log2(peak.freq / 440) + 69);
+                            return { note: midiNote, magnitude: peak.magnitude };
+                        })
+                        .filter(item => item.note >= 21 && item.note <= 108);
 
-                    if (notes.length > 0) {
-                        const result = {
-                            notes: [...new Set(notes)].sort((a, b) => a - b), // Remove duplicates and sort
-                            confidence: Math.min(peaks[0]?.magnitude / 255 || 0, 1.0)
-                        };
-                        callback(result);
+                    if (detectedNotes.length > 0) {
+                        const notes = [...new Set(detectedNotes.map(n => n.note))].sort((a, b) => a - b);
+
+                        // Smoothing: only update if notes changed significantly
+                        const notesChanged = notes.length !== window.previousNotes.length ||
+                            notes.some((note, i) => note !== window.previousNotes[i]);
+
+                        if (notesChanged) {
+                            window.previousNotes = notes;
+                            const maxMagnitude = Math.max(...detectedNotes.map(n => n.magnitude));
+                            const result = {
+                                notes: notes,
+                                confidence: Math.min(maxMagnitude / 255, 1.0)
+                            };
+                            callback(result);
+                        }
+                    } else if (window.previousNotes.length > 0) {
+                        // Clear notes if nothing detected
+                        window.previousNotes = [];
+                        callback({ notes: [], confidence: 0 });
                     }
 
                     animationId = requestAnimationFrame(detectPitch);
@@ -427,6 +599,8 @@ struct RecognitionResult {
             if (audioContext.state !== 'closed') {
                 audioContext.close();
             }
+            window.previousNotes = [];
+            window.noiseFloor = 100;
         };
     }
 
