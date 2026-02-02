@@ -713,8 +713,6 @@ fn PianoVisualization() -> Element {
     let mut white_keys = Vec::new();
     let mut black_keys = Vec::new();
 
-    let white_key_width = 32.0;
-
     for note in start_note..=end_note {
         let pitch = note % 12;
         let is_black = matches!(pitch, 1 | 3 | 6 | 8 | 10); // C#, D#, F#, G#, A#
@@ -746,17 +744,19 @@ fn PianoVisualization() -> Element {
 
             let octave = (note - start_note) / 12;
             let white_keys_in_octave = 7;
-            let total_white_keys_before =
-                octave as f32 * white_keys_in_octave as f32 + white_keys_before as f32;
+            let total_white_keys_before = octave as u32 * white_keys_in_octave + white_keys_before;
 
-            // Position black key between white keys (shifted left by half its width)
-            let left_position = total_white_keys_before * white_key_width - 10.0;
+            // Use CSS calc() for responsive positioning
+            let left_style = format!(
+                "left: calc({} * var(--white-key-width) - var(--black-key-offset));",
+                total_white_keys_before
+            );
 
             black_keys.push(rsx! {
                 div {
                     key: "{note}",
                     class: "piano-key black {state_class}",
-                    style: "left: {left_position}px;",
+                    style: "{left_style}",
                 }
             });
         } else {

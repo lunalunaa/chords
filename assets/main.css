@@ -5,6 +5,11 @@
     --text-dim: #808080;
     --border: #2a2a2a;
     --accent: #5b9bd5;
+
+    /* Piano key dimensions */
+    --white-key-width: 32px;
+    --black-key-width: 20px;
+    --black-key-offset: 10px;
 }
 
 * {
@@ -75,6 +80,33 @@ body {
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
     overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+    position: relative;
+}
+
+/* Scroll hint shadow on mobile */
+@media (max-width: 600px) {
+    .piano-container::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 40px;
+        background: linear-gradient(
+            to left,
+            rgba(18, 18, 18, 0.9),
+            transparent
+        );
+        pointer-events: none;
+        opacity: 1;
+        transition: opacity 0.3s ease;
+    }
+
+    .piano-container::-webkit-scrollbar {
+        height: 6px;
+    }
 }
 
 .piano-keyboard {
@@ -82,6 +114,7 @@ body {
     height: 150px;
     display: inline-block;
     white-space: nowrap;
+    min-width: min-content; /* Prevent shrinking */
 }
 
 .piano-key {
@@ -90,7 +123,7 @@ body {
 }
 
 .piano-key.white {
-    width: 32px;
+    width: var(--white-key-width);
     height: 150px;
     background: linear-gradient(to bottom, #ffffff 0%, #f5f5f5 100%);
     display: inline-block;
@@ -107,7 +140,7 @@ body {
 }
 
 .piano-key.black {
-    width: 20px;
+    width: var(--black-key-width);
     height: 95px;
     background: linear-gradient(to bottom, #1a1a1a 0%, #000000 100%);
     position: absolute;
@@ -568,18 +601,53 @@ button:focus-visible {
 
 /* Mobile responsiveness for piano */
 @media (max-width: 600px) {
+    :root {
+        --white-key-width: 24px;
+        --black-key-width: 15px;
+        --black-key-offset: 7.5px;
+    }
+
+    .piano-container {
+        padding: 10px 5px;
+        justify-content: flex-start; /* Align left for better scroll UX */
+    }
+
     .piano-keyboard {
         height: 100px;
+        margin: 0; /* Remove any margins that might cause issues */
     }
 
     .piano-key.white {
-        width: 26px;
         height: 100px;
     }
 
     .piano-key.black {
-        width: 16px;
         height: 65px;
+    }
+}
+
+/* Extra small screens */
+@media (max-width: 400px) {
+    :root {
+        --white-key-width: 22px;
+        --black-key-width: 14px;
+        --black-key-offset: 7px;
+    }
+
+    .piano-container {
+        padding: 8px 3px;
+    }
+
+    .piano-keyboard {
+        height: 90px;
+    }
+
+    .piano-key.white {
+        height: 90px;
+    }
+
+    .piano-key.black {
+        height: 58px;
     }
 }
 
