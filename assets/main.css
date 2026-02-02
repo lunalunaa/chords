@@ -65,6 +65,142 @@ body {
     font-weight: 400;
 }
 
+/* Piano Visualization */
+.piano-container {
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+}
+
+.piano-keyboard {
+    position: relative;
+    height: 150px;
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.piano-key {
+    transition: all 0.15s ease;
+    cursor: pointer;
+}
+
+.piano-key.white {
+    width: 32px;
+    height: 150px;
+    background: linear-gradient(to bottom, #ffffff 0%, #f5f5f5 100%);
+    display: inline-block;
+    border: 1px solid #333;
+    border-right: 1px solid #ccc;
+    box-sizing: border-box;
+    vertical-align: top;
+    position: relative;
+    z-index: 1;
+}
+
+.piano-key.white:hover {
+    background: linear-gradient(to bottom, #f8f8f8 0%, #ececec 100%);
+}
+
+.piano-key.black {
+    width: 20px;
+    height: 95px;
+    background: linear-gradient(to bottom, #1a1a1a 0%, #000000 100%);
+    position: absolute;
+    top: 0;
+    z-index: 2;
+    border: 1px solid #000;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+}
+
+.piano-key.black:hover {
+    background: linear-gradient(to bottom, #2a2a2a 0%, #0a0a0a 100%);
+}
+
+/* Active state (target chord notes) */
+.piano-key.white.active {
+    background: linear-gradient(to bottom, #7ab8f0 0%, #5b9bd5 100%);
+    box-shadow:
+        0 0 15px rgba(91, 155, 213, 0.8),
+        0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.piano-key.black.active {
+    background: linear-gradient(to bottom, #5a9bc2 0%, #4a8bc2 100%);
+    box-shadow:
+        0 0 15px rgba(74, 139, 194, 0.8),
+        0 3px 5px rgba(0, 0, 0, 0.4);
+}
+
+/* Detected state (user playing) */
+.piano-key.white.detected {
+    background: linear-gradient(to bottom, #ffb870 0%, #f4a460 100%);
+    box-shadow:
+        0 0 12px rgba(244, 164, 96, 0.7),
+        0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.piano-key.black.detected {
+    background: linear-gradient(to bottom, #e49450 0%, #d4843f 100%);
+    box-shadow:
+        0 0 12px rgba(212, 132, 63, 0.7),
+        0 3px 5px rgba(0, 0, 0, 0.4);
+}
+
+/* Correct match state */
+.piano-key.white.detected-correct {
+    background: linear-gradient(to bottom, #7cd87c 0%, #5cb85c 100%);
+    box-shadow:
+        0 0 20px rgba(92, 184, 92, 0.9),
+        0 2px 5px rgba(0, 0, 0, 0.2);
+    animation: correctPulse 0.5s ease-out;
+}
+
+.piano-key.black.detected-correct {
+    background: linear-gradient(to bottom, #5fae5f 0%, #4a9e4a 100%);
+    box-shadow:
+        0 0 20px rgba(74, 158, 74, 0.9),
+        0 3px 5px rgba(0, 0, 0, 0.4);
+    animation: correctPulse 0.5s ease-out;
+}
+
+@keyframes correctPulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* Recognition Feedback */
+.recognition-feedback {
+    text-align: center;
+    padding: 12px 20px;
+    font-size: 1.2rem;
+    font-weight: 500;
+    color: var(--accent);
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
 /* Buttons Section */
 #buttons {
     display: grid;
@@ -81,7 +217,7 @@ body {
 
 @media (min-width: 480px) {
     #buttons {
-        grid-template-columns: 2fr 1fr 1fr;
+        grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
         gap: 12px;
     }
 
@@ -142,6 +278,54 @@ button:active {
     border-radius: 4px;
     border: 1px solid var(--border);
     min-height: 48px;
+}
+
+.keyboard-toggle-btn {
+    background: transparent;
+    color: var(--text);
+    font-size: 1rem;
+    font-weight: 400;
+    padding: 12px 24px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    min-height: 48px;
+}
+
+.keyboard-toggle-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.listen-btn {
+    background: transparent;
+    color: #e74c3c;
+    font-size: 1rem;
+    font-weight: 400;
+    padding: 12px 24px;
+    border-radius: 4px;
+    border: 1px solid #e74c3c;
+    min-height: 48px;
+}
+
+.listen-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.listen-btn.active {
+    background: #e74c3c;
+    color: white;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.7;
+    }
 }
 
 /* Settings Overlay */
@@ -345,13 +529,33 @@ button:focus-visible {
         padding: 10px;
     }
 
+    .piano-container {
+        padding: 10px;
+    }
+
+    .piano-keyboard {
+        height: 100px;
+    }
+
+    .piano-key.white {
+        height: 100px;
+        width: 28px;
+    }
+
+    .piano-key.black {
+        height: 65px;
+        width: 18px;
+    }
+
     #buttons {
         flex-direction: row;
         padding: 12px 20px;
     }
 
     .primary-btn,
-    .settings-btn {
+    .settings-btn,
+    .listen-btn,
+    .keyboard-toggle-btn {
         min-height: 44px;
         padding: 10px 20px;
         font-size: 1rem;
@@ -360,4 +564,39 @@ button:focus-visible {
     .settings-panel {
         max-height: 95vh;
     }
+}
+
+/* Mobile responsiveness for piano */
+@media (max-width: 600px) {
+    .piano-keyboard {
+        height: 100px;
+    }
+
+    .piano-key.white {
+        width: 26px;
+        height: 100px;
+    }
+
+    .piano-key.black {
+        width: 16px;
+        height: 65px;
+    }
+}
+
+/* Scrollbar for piano container */
+.piano-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.piano-container::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+.piano-container::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+.piano-container::-webkit-scrollbar-thumb:hover {
+    background: var(--text-dim);
 }

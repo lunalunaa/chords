@@ -11,8 +11,10 @@ use rust_music_theory::{
     note::{Notes, Pitch},
     scale::{Direction, Scale, ScaleType},
 };
+use serde::{Deserialize, Serialize};
 use strum::{EnumIter, IntoEnumIterator};
 use wasm_bindgen::prelude::*;
+use web_sys::console;
 
 static CSS: Asset = asset!("assets/main.css");
 
@@ -243,6 +245,10 @@ fn next_chord_with_settings(settings: &ChordSettings) -> ChordWrapper {
 static SETTINGS: GlobalSignal<ChordSettings> = Signal::global(ChordSettings::default);
 static CHORD: GlobalSignal<Option<ChordWrapper>> = Signal::global(|| None);
 static SETTINGS_OPEN: GlobalSignal<bool> = Signal::global(|| false);
+static LISTENING: GlobalSignal<bool> = Signal::global(|| false);
+static DETECTED_NOTES: GlobalSignal<Vec<u8>> = Signal::global(Vec::new);
+static RECOGNITION_FEEDBACK: GlobalSignal<Option<String>> = Signal::global(|| None);
+static KEYBOARD_VISIBLE: GlobalSignal<bool> = Signal::global(|| true);
 
 fn generate_chord() {
     let settings = SETTINGS.read();
@@ -310,6 +316,132 @@ extern "C" {
     fn playChord(frequencies: Vec<f64>, duration: f64);
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct RecognitionResult {
+    notes: Vec<u8>,
+    confidence: f64,
+}
+
+#[wasm_bindgen(inline_js = r#"
+    // Store the stop function globally
+    window.audioStopFunction = null;
+
+    export function startListening(callback) {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            console.error("Media devices not supported");
+            return null;
+        }
+
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        let analyser = null;
+        let dataArray = null;
+        let animationId = null;
+        let mediaStream = null;
+
+        navigator.mediaDevices.getUserMedia({ audio: true })
+            .then(stream => {
+                mediaStream = stream;
+                const source = audioContext.createMediaStreamSource(stream);
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 4096;
+                analyser.smoothingTimeConstant = 0.8;
+                source.connect(analyser);
+
+                const bufferLength = analyser.frequencyBinCount;
+                dataArray = new Float32Array(bufferLength);
+
+                function detectPitch() {
+                    analyser.getFloatTimeDomainData(dataArray);
+
+                    // Autocorrelation pitch detection
+                    const sampleRate = audioContext.sampleRate;
+                    const threshold = 0.2;
+                    const detected = [];
+
+                    // Simple peak detection for multiple pitches
+                    const freqData = new Uint8Array(analyser.frequencyBinCount);
+                    analyser.getByteFrequencyData(freqData);
+
+                    const minFreq = 50; // ~G1
+                    const maxFreq = 2000; // ~B6
+                    const minBin = Math.floor(minFreq * analyser.fftSize / sampleRate);
+                    const maxBin = Math.floor(maxFreq * analyser.fftSize / sampleRate);
+
+                    // Find peaks in frequency domain
+                    const peaks = [];
+                    const minPeakHeight = 120; // Threshold for peak detection
+                    const minPeakDistance = 3; // Minimum distance between peaks
+
+                    for (let i = minBin; i < maxBin; i++) {
+                        if (freqData[i] > minPeakHeight) {
+                            let isPeak = true;
+                            // Check if it's a local maximum
+                            for (let j = Math.max(minBin, i - minPeakDistance); j <= Math.min(maxBin - 1, i + minPeakDistance); j++) {
+                                if (j !== i && freqData[j] >= freqData[i]) {
+                                    isPeak = false;
+                                    break;
+                                }
+                            }
+                            if (isPeak) {
+                                const freq = i * sampleRate / analyser.fftSize;
+                                peaks.push({ freq, magnitude: freqData[i] });
+                            }
+                        }
+                    }
+
+                    // Sort peaks by magnitude and take top ones
+                    peaks.sort((a, b) => b.magnitude - a.magnitude);
+                    const topPeaks = peaks.slice(0, 6); // Max 6 notes in a chord
+
+                    // Convert frequencies to MIDI notes
+                    const notes = topPeaks.map(peak => {
+                        const midiNote = Math.round(12 * Math.log2(peak.freq / 440) + 69);
+                        return midiNote;
+                    }).filter(note => note >= 21 && note <= 108); // Valid piano range
+
+                    if (notes.length > 0) {
+                        const result = {
+                            notes: [...new Set(notes)].sort((a, b) => a - b), // Remove duplicates and sort
+                            confidence: Math.min(peaks[0]?.magnitude / 255 || 0, 1.0)
+                        };
+                        callback(result);
+                    }
+
+                    animationId = requestAnimationFrame(detectPitch);
+                }
+
+                detectPitch();
+            })
+            .catch(err => {
+                console.error("Error accessing microphone:", err);
+            });
+
+        // Store cleanup function globally
+        window.audioStopFunction = function() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+            }
+            if (audioContext.state !== 'closed') {
+                audioContext.close();
+            }
+        };
+    }
+
+    export function stopListening() {
+        if (window.audioStopFunction) {
+            window.audioStopFunction();
+            window.audioStopFunction = null;
+        }
+    }
+    "#)]
+extern "C" {
+    fn startListening(callback: &Closure<dyn Fn(JsValue)>);
+    fn stopListening();
+}
+
 fn play_current_chord() {
     if let Some(chord) = CHORD.read().as_ref() {
         let frequencies: Vec<f64> = chord
@@ -323,6 +455,156 @@ fn play_current_chord() {
             .collect();
 
         playChord(frequencies, 2.0);
+    }
+}
+
+fn start_recognition() {
+    // If already listening, stop first
+    if *LISTENING.read() {
+        stop_recognition();
+        return;
+    }
+
+    *LISTENING.write() = true;
+    *DETECTED_NOTES.write() = Vec::new();
+    *RECOGNITION_FEEDBACK.write() = None;
+
+    let callback = Closure::wrap(Box::new(move |value: JsValue| {
+        if let Result::Ok(result) = serde_wasm_bindgen::from_value::<RecognitionResult>(value) {
+            console::log_1(&format!("Detected notes: {:?}", result.notes).into());
+            *DETECTED_NOTES.write() = result.notes.clone();
+
+            // Check if detected notes match the current chord
+            if let Some(chord) = CHORD.read().as_ref() {
+                let target_notes: Vec<u8> = chord
+                    .notes()
+                    .iter()
+                    .map(|note| note.pitch.into_u8() + (note.octave as u8 * 12))
+                    .collect();
+
+                let detected = &result.notes;
+
+                // Simple matching: check if detected notes contain all target notes
+                let all_matched = target_notes.iter().all(|&note| {
+                    detected
+                        .iter()
+                        .any(|&d| (d as i16 - note as i16).abs() <= 1)
+                });
+
+                if all_matched && detected.len() > 0 {
+                    *RECOGNITION_FEEDBACK.write() = Some("✓ Correct!".to_string());
+                } else if detected.len() > 0 {
+                    *RECOGNITION_FEEDBACK.write() = Some("Keep trying...".to_string());
+                }
+            }
+        }
+    }) as Box<dyn Fn(JsValue)>);
+
+    startListening(&callback);
+    callback.forget(); // Keep callback alive
+}
+
+fn stop_recognition() {
+    stopListening(); // Call JavaScript cleanup function
+    *LISTENING.write() = false;
+    *DETECTED_NOTES.write() = Vec::new();
+    *RECOGNITION_FEEDBACK.write() = None;
+}
+
+#[component]
+fn PianoVisualization() -> Element {
+    let chord = CHORD.read();
+    let detected_notes = DETECTED_NOTES.read();
+
+    // Piano range: C3 (48) to C6 (84) - 3 octaves
+    let start_note = 48u8;
+    let end_note = 84u8;
+
+    let active_notes: HashSet<u8> = if let Some(ref c) = *chord {
+        c.notes()
+            .iter()
+            .map(|note| note.pitch.into_u8() + (note.octave as u8 * 12))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
+    let detected_set: HashSet<u8> = detected_notes
+        .iter()
+        .filter(|&&n| n >= start_note && n <= end_note)
+        .copied()
+        .collect();
+
+    // Generate white keys and black keys separately
+    let mut white_keys = Vec::new();
+    let mut black_keys = Vec::new();
+
+    let white_key_width = 32.0;
+
+    for note in start_note..=end_note {
+        let pitch = note % 12;
+        let is_black = matches!(pitch, 1 | 3 | 6 | 8 | 10); // C#, D#, F#, G#, A#
+        let is_active = active_notes.contains(&note);
+        let is_detected = detected_set.contains(&note);
+
+        let state_class = if is_detected && is_active {
+            "detected-correct"
+        } else if is_detected {
+            "detected"
+        } else if is_active {
+            "active"
+        } else {
+            ""
+        };
+
+        if is_black {
+            // Black keys positioned between white keys
+            // Calculate position based on the pattern within an octave
+            let octave_position = pitch % 12;
+            let white_keys_before = match octave_position {
+                1 => 1,  // C# comes after C
+                3 => 2,  // D# comes after D
+                6 => 4,  // F# comes after F
+                8 => 5,  // G# comes after G
+                10 => 6, // A# comes after A
+                _ => 0,
+            };
+
+            let octave = (note - start_note) / 12;
+            let white_keys_in_octave = 7;
+            let total_white_keys_before =
+                octave as f32 * white_keys_in_octave as f32 + white_keys_before as f32;
+
+            // Position black key between white keys (shifted left by half its width)
+            let left_position = total_white_keys_before * white_key_width - 10.0;
+
+            black_keys.push(rsx! {
+                div {
+                    key: "{note}",
+                    class: "piano-key black {state_class}",
+                    style: "left: {left_position}px;",
+                }
+            });
+        } else {
+            // White keys
+            white_keys.push(rsx! {
+                div {
+                    key: "{note}",
+                    class: "piano-key white {state_class}",
+                }
+            });
+        }
+    }
+
+    rsx! {
+        div { class: "piano-container",
+            div { class: "piano-keyboard",
+                // White keys layer
+                {white_keys.into_iter()}
+                // Black keys layer (on top)
+                {black_keys.into_iter()}
+            }
+        }
     }
 }
 
@@ -488,6 +770,11 @@ fn SettingsPanel() -> Element {
 
 #[component]
 fn App() -> Element {
+    let listening = LISTENING.read();
+    let feedback = RECOGNITION_FEEDBACK.read();
+    let has_chord = CHORD.read().is_some();
+    let keyboard_visible = KEYBOARD_VISIBLE.read();
+
     rsx! {
         document::Stylesheet { href: CSS }
         document::Title { "Chords Practice" }
@@ -499,6 +786,16 @@ fn App() -> Element {
 
             CurrentChord {}
 
+            if has_chord && *keyboard_visible {
+                PianoVisualization {}
+            }
+
+            if let Some(ref msg) = *feedback {
+                div { class: "recognition-feedback",
+                    "{msg}"
+                }
+            }
+
             div { id: "buttons",
                 button {
                     class: "primary-btn",
@@ -508,13 +805,35 @@ fn App() -> Element {
                 button {
                     class: "play-btn",
                     onclick: move |_| play_current_chord(),
-                    disabled: CHORD.read().is_none(),
+                    disabled: !has_chord,
                     "▶ Play"
+                }
+                if !*listening {
+                    button {
+                        class: "listen-btn",
+                        onclick: move |_| start_recognition(),
+                        disabled: !has_chord,
+                        "🎤 Listen"
+                    }
+                } else {
+                    button {
+                        class: "listen-btn active",
+                        onclick: move |_| stop_recognition(),
+                        "Stop"
+                    }
                 }
                 button {
                     class: "settings-btn",
                     onclick: move |_| *SETTINGS_OPEN.write() = true,
                     "Options"
+                }
+                button {
+                    class: "keyboard-toggle-btn",
+                    onclick: move |_| {
+                        let mut visible = KEYBOARD_VISIBLE.write();
+                        *visible = !*visible;
+                    },
+                    if *keyboard_visible { "Hide Piano" } else { "Show Piano" }
                 }
             }
 
